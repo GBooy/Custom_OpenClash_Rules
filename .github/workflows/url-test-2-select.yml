@@ -1,0 +1,89 @@
+name: Sync and Modify Custom_Clash.ini
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 每天北京时间早上6点自动同步 (UTC 22:00)
+  workflow_dispatch:       # 允许手动触发
+
+jobs:
+  sync-and-modify:
+    runs-on: ubuntu-latest
+    # 必须赋予写入权限，否则无法 push
+    permissions:
+      contents: write
+
+    steps:
+      # Step 1: 检出你自己(GBooy)的仓库
+      - name: Checkout My Repo
+        uses: actions/checkout@v3
+
+      # Step 2: 下载上游文件并进行魔改
+      - name: Download and Modify
+        run: |
+          # 1. 确保本地 cfg 目录存在
+          mkdir -p cfg
+
+          # 2. 从上游 (Aethersailor) 下载最新原始文件到临时文件
+          # 使用 raw.githubusercontent.com 获取纯文本
+          echo "正在下载上游文件..."
+          curl -sSL "https://raw.githubusercontent.com/Aethersailor/Custom_Clash_Rules/main/cfg/Custom_Clash.ini" -o raw_file.ini
+
+          # 3. 开始修改逻辑
+          echo "开始处理文件..."
+
+          # [逻辑 A] 只保留 [custom] 及其后内容
+          awk '/\[custom\]/{f=1} f' raw_file.ini > processed.ini
+
+          # [逻辑 B] 准备头部注释
+          cat > header.txt << 'EOF'
+          ;Custom_Clash_Rules (Sync & Modified)
+          ;全分组防 DNS 泄漏订阅转换模板
+          ;源项目：https://github.com/Aethersailor/Custom_Clash_Rules
+          ;当前仓库：https://github.com/GBooy/Custom_OpenClash_Rules
+          ;基于 ACL4SSR 模板魔改，已替换 url-test 为 select
+          
+          EOF
+
+          # [逻辑 C] 合并头部
+          cat header.txt processed.ini > final_file.ini
+
+          # [逻辑 D] 删除 CN 规则
+          sed -i '/GEOSITE,cn/d' final_file.ini
+          sed -i '/GEOIP,cn/d' final_file.ini
+
+          # [逻辑 E] 插入全球直连规则 (在 Custom_Proxy 下方)
+          sed -i '/Custom_Proxy/a ruleset=🎯 全球直连,[]GEOIP,cn,no-resolve' final_file.ini
+          sed -i '/Custom_Proxy/a ruleset=🎯 全球直连,[]GEOSITE,cn' final_file.ini
+
+          # [逻辑 F] 🔥新需求🔥：将 url-test 替换为 select
+          # s代表替换, g代表全局(一行内所有匹配项)
+          sed -i 's/url-test/select/g' final_file.ini
+
+          # 4. 将处理好的文件移动到最终位置
+          mv final_file.ini cfg/Custom_Clash.ini
+
+          # 5. 清理临时文件
+          rm -f raw_file.ini processed.ini header.txt
+          
+          echo "修改完成，预览前15行："
+          head -n 15 cfg/Custom_Clash.ini
+
+      # Step 3: 提交并推送到你的仓库
+      - name: Commit and Push Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add cfg/Custom_Clash.ini
+          
+          # 检查是否有变化，有变化才提交
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-sync: Upstream update + Modify url-test to select"
+            
+            # 因为是在 Checkout 自己的仓库，且有 permissions: write，
+            # 这里的 push 不需要 Token URL，直接 push 即可
+            git push
+            echo "✅ 推送成功！"
+          else
+            echo "⚠️ 文件内容没有变化，跳过提交。"
+          fi
